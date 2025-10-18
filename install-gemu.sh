@@ -1,168 +1,186 @@
-#!/bin/bash
-# Gemu Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/Oppla-AI/gemu/main/install-gemu.sh | bash
+#!/usr/bin/env bash
+set -euo pipefail
+APP=gemu
 
-set -e
-
-# Configuration
-REPO="Oppla-AI/gemu"
-BINARY_NAME="gemu"
-INSTALL_DIR="/usr/local/bin"
-
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+ORANGE='\033[38;2;255;140;0m'
 NC='\033[0m' # No Color
 
-# Helper functions
-print_error() {
-    echo -e "${RED}Error: $1${NC}" >&2
-}
+requested_version=${VERSION:-}
 
-print_success() {
-    echo -e "${GREEN}$1${NC}"
-}
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [[ "$os" == "darwin" ]]; then
+    os="darwin"
+fi
+arch=$(uname -m)
 
-print_info() {
-    echo -e "${YELLOW}$1${NC}"
-}
+if [[ "$arch" == "aarch64" ]]; then
+  arch="arm64"
+elif [[ "$arch" == "x86_64" ]]; then
+  arch="x64"
+fi
 
-# Detect OS
-detect_os() {
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    case "$os" in
-        linux) echo "linux" ;;
-        darwin) echo "darwin" ;;
-        mingw*|msys*|cygwin*) echo "windows" ;;
-        *)
-            print_error "Unsupported operating system: $os"
-            exit 1
-            ;;
+filename="$APP-$os-$arch.zip"
+
+
+case "$filename" in
+    *"-linux-"*)
+        [[ "$arch" == "x64" || "$arch" == "arm64" ]] || exit 1
+    ;;
+    *"-darwin-"*)
+        [[ "$arch" == "x64" || "$arch" == "arm64" ]] || exit 1
+    ;;
+    *"-windows-"*)
+        [[ "$arch" == "x64" ]] || exit 1
+    ;;
+    *)
+        echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
+        exit 1
+    ;;
+esac
+
+INSTALL_DIR=$HOME/.gemu/bin
+mkdir -p "$INSTALL_DIR"
+
+if [ -z "$requested_version" ]; then
+    url="https://github.com/Oppla-AI/gemu/releases/latest/download/$filename"
+    specific_version=$(curl -s https://api.github.com/repos/Oppla-AI/gemu/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+
+    if [[ $? -ne 0 || -z "$specific_version" ]]; then
+        echo -e "${RED}Failed to fetch version information${NC}"
+        exit 1
+    fi
+else
+    url="https://github.com/Oppla-AI/gemu/releases/download/v${requested_version}/$filename"
+    specific_version=$requested_version
+fi
+
+print_message() {
+    local level=$1
+    local message=$2
+    local color=""
+
+    case $level in
+        info) color="${GREEN}" ;;
+        warning) color="${YELLOW}" ;;
+        error) color="${RED}" ;;
     esac
+
+    echo -e "${color}${message}${NC}"
 }
 
-# Detect architecture
-detect_arch() {
-    local arch=$(uname -m)
-    case "$arch" in
-        x86_64|amd64) echo "x64" ;;
-        aarch64|arm64) echo "arm64" ;;
-        *)
-            print_error "Unsupported architecture: $arch"
-            exit 1
-            ;;
-    esac
-}
-
-# Check if running with necessary permissions
-check_permissions() {
-    if [ "$INSTALL_DIR" = "/usr/local/bin" ] && [ "$EUID" -ne 0 ] && ! sudo -n true 2>/dev/null; then
-        print_info "This script requires sudo access to install to $INSTALL_DIR"
-        print_info "You may be prompted for your password."
-    fi
-}
-
-# Download and install Gemu
-install_gemu() {
-    local os=$(detect_os)
-    local arch=$(detect_arch)
-    local platform="${os}-${arch}"
-
-    print_info "Detected platform: $platform"
-
-    # Get latest release URL
-    local latest_release_url="https://api.github.com/repos/${REPO}/releases/latest"
-
-    print_info "Fetching latest release information..."
-
-    # Try to get latest release, fallback to direct download if API fails
-    local download_url
-    if command -v curl >/dev/null 2>&1; then
-        download_url=$(curl -sL "$latest_release_url" | grep "browser_download_url.*gemu-${platform}.zip" | cut -d '"' -f 4)
-    fi
-
-    # If we couldn't get the URL from API, construct it directly
-    if [ -z "$download_url" ]; then
-        print_info "Using direct download URL..."
-        download_url="https://github.com/${REPO}/releases/latest/download/gemu-${platform}.zip"
-    fi
-
-    print_info "Downloading Gemu for $platform..."
-
-    # Create temp directory
-    local temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
-
-    # Download the binary
-    if command -v curl >/dev/null 2>&1; then
-        curl -L "$download_url" -o "$temp_dir/gemu.zip" || {
-            print_error "Failed to download Gemu"
-            exit 1
-        }
-    elif command -v wget >/dev/null 2>&1; then
-        wget "$download_url" -O "$temp_dir/gemu.zip" || {
-            print_error "Failed to download Gemu"
-            exit 1
-        }
-    else
-        print_error "Neither curl nor wget found. Please install one of them."
-        exit 1
-    fi
-
-    # Extract the binary
-    print_info "Extracting Gemu..."
-    if command -v unzip >/dev/null 2>&1; then
-        unzip -q "$temp_dir/gemu.zip" -d "$temp_dir"
-    else
-        print_error "unzip not found. Please install unzip."
-        exit 1
-    fi
-
-    # Find the binary (it might be gemu or gemu.exe)
-    local binary_name="gemu"
-    if [ "$os" = "windows" ]; then
-        binary_name="gemu.exe"
-    fi
-
-    if [ ! -f "$temp_dir/$binary_name" ]; then
-        print_error "Binary not found in archive"
-        exit 1
-    fi
-
-    # Install the binary
-    print_info "Installing Gemu to $INSTALL_DIR..."
-    if [ "$INSTALL_DIR" = "/usr/local/bin" ]; then
-        sudo mv "$temp_dir/$binary_name" "$INSTALL_DIR/gemu"
-        sudo chmod +x "$INSTALL_DIR/gemu"
-    else
-        mv "$temp_dir/$binary_name" "$INSTALL_DIR/gemu"
-        chmod +x "$INSTALL_DIR/gemu"
-    fi
-
-    # Verify installation
+check_version() {
     if command -v gemu >/dev/null 2>&1; then
-        local version=$(gemu --version 2>/dev/null || echo "unknown")
-        print_success "✓ Gemu installed successfully!"
-        print_info "Version: $version"
-        print_info "Location: $(which gemu)"
-    else
-        print_error "Installation completed but gemu is not in PATH"
-        print_info "Add $INSTALL_DIR to your PATH or run: $INSTALL_DIR/gemu"
+        gemu_path=$(which gemu)
+
+        # Check if version is installed
+        installed_version=$(gemu --version 2>/dev/null || echo "unknown")
+
+        if [[ "$installed_version" != "$specific_version" ]]; then
+            print_message info "Installed version: ${YELLOW}$installed_version."
+        else
+            print_message info "Version ${YELLOW}$specific_version${GREEN} already installed"
+            exit 0
+        fi
     fi
 }
 
-# Main execution
-main() {
-    print_info "=== Gemu Installer ==="
-
-    check_permissions
-    install_gemu
-
-    print_info ""
-    print_info "To get started, run: gemu --help"
-    print_info "To authenticate, run: gemu auth gemu"
+download_and_install() {
+    print_message info "Downloading ${ORANGE}gemu ${GREEN}version: ${YELLOW}$specific_version ${GREEN}..."
+    mkdir -p gemutmp && cd gemutmp
+    curl -# -L -o "$filename" "$url"
+    unzip -q "$filename"
+    mv gemu "$INSTALL_DIR"
+    chmod 755 "${INSTALL_DIR}/gemu"
+    cd .. && rm -rf gemutmp
 }
 
-# Run main function
-main "$@"
+check_version
+download_and_install
+
+
+add_to_path() {
+    local config_file=$1
+    local command=$2
+
+    if grep -Fxq "$command" "$config_file"; then
+        print_message info "Command already exists in $config_file, skipping write."
+    elif [[ -w $config_file ]]; then
+        echo -e "\n# gemu" >> "$config_file"
+        echo "$command" >> "$config_file"
+        print_message info "Successfully added ${ORANGE}gemu ${GREEN}to \$PATH in $config_file"
+    else
+        print_message warning "Manually add the directory to $config_file (or similar):"
+        print_message info "  $command"
+    fi
+}
+
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+
+current_shell=$(basename "$SHELL")
+case $current_shell in
+    fish)
+        config_files="$HOME/.config/fish/config.fish"
+    ;;
+    zsh)
+        config_files="$HOME/.zshrc $HOME/.zshenv $XDG_CONFIG_HOME/zsh/.zshrc $XDG_CONFIG_HOME/zsh/.zshenv"
+    ;;
+    bash)
+        config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
+    ;;
+    ash)
+        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
+    ;;
+    sh)
+        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
+    ;;
+    *)
+        # Default case if none of the above matches
+        config_files="$HOME/.bashrc $HOME/.bash_profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
+    ;;
+esac
+
+config_file=""
+for file in $config_files; do
+    if [[ -f $file ]]; then
+        config_file=$file
+        break
+    fi
+done
+
+if [[ -z $config_file ]]; then
+    print_message error "No config file found for $current_shell. Checked files: ${config_files[@]}"
+    exit 1
+fi
+
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    case $current_shell in
+        fish)
+            add_to_path "$config_file" "fish_add_path $INSTALL_DIR"
+        ;;
+        zsh)
+            add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+        bash)
+            add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+        ash)
+            add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+        sh)
+            add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+        *)
+            export PATH=$INSTALL_DIR:$PATH
+            print_message warning "Manually add the directory to $config_file (or similar):"
+            print_message info "  export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+    esac
+fi
+
+if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
+    echo "$INSTALL_DIR" >> $GITHUB_PATH
+    print_message info "Added $INSTALL_DIR to \$GITHUB_PATH"
+fi
