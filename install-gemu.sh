@@ -151,8 +151,27 @@ for file in $config_files; do
 done
 
 if [[ -z $config_file ]]; then
-    print_message error "No config file found for $current_shell. Checked files: ${config_files[@]}"
-    exit 1
+    # Create default config file for the shell
+    case $current_shell in
+        fish)
+            config_file="$HOME/.config/fish/config.fish"
+            mkdir -p "$(dirname "$config_file")"
+            touch "$config_file"
+            ;;
+        zsh)
+            config_file="$HOME/.zshrc"
+            touch "$config_file"
+            ;;
+        bash)
+            config_file="$HOME/.bashrc"
+            touch "$config_file"
+            ;;
+        *)
+            config_file="$HOME/.profile"
+            touch "$config_file"
+            ;;
+    esac
+    print_message info "Created new config file: $config_file"
 fi
 
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
